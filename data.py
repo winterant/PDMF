@@ -22,7 +22,7 @@ def load_toy_example(train=True):
 
 
 class MultiViewDataset(Dataset):
-    def __init__(self, data_path='dataset/handwritten_6views_train_test.mat', train=True):
+    def __init__(self, data_path='dataset/handwritten_6views_train_test.mat', train=True, custom_views=None):
         super().__init__()
         if data_path == 'toy-example':
             self.x, self.y = load_toy_example(train)
@@ -37,6 +37,9 @@ class MultiViewDataset(Dataset):
         self.y = dataset[f'gt_{mode}'].flatten().astype(np.int64)
         if min(self.y) > 0:
             self.y -= 1
+        
+        if custom_views is not None:
+            self.x={k:self.x[k] for k in custom_views}
 
     def __getitem__(self, index):
         x = dict()

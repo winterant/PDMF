@@ -16,36 +16,59 @@ class ParallelModule(nn.Module):
         return y
 
 
+class EleLinear(nn.Module):
+    def __init__(self, dim):
+        super().__init__()
+        self.weight = nn.Parameter(torch.rand(dim))
+        self.bias = nn.Parameter(torch.rand(dim))
+
+    def forward(self, input):
+        return input * self.weight + self.bias
+
+
 class ProposedModel(nn.Module):
 
-    def __init__(self, sample_shapes: list, num_classes, num_train, fc_hidden, clustering_dim, alpha, beta, gamma):
+    def __init__(self, sample_shapes: list, num_classes, num_train, fc_hidden, clustering_dim, clustering_label, alpha_1, alpha_2, sigma, lambda_1, lambda_2):
         super().__init__()
-        self.sample_shapes = sample_shapes
+        self.sample_shapes = sample_shapes  # each view's dim
+        self.num_views = len(sample_shapes)
         self.num_classes = num_classes
-        self.alpha = alpha
-        self.beta = beta
-        self.gamma = gamma
-        # 解码器用于pre-training
+        self.clustering_dim = clustering_dim
+        self.clustering_label = clustering_label
+        self.alpha_1 = alpha_1
+        self.alpha_2 = alpha_2
+        self.sigma = sigma
+        self.lambda_1 = lambda_1
+        self.lambda_2 = lambda_2
+        # W and z_n
+        self.W = nn.ParameterList([nn.Parameter(torch.rand(clustering_dim, fc_hidden)) for i in sample_shapes])
+        self.clustering = nn.Embedding(num_train, clustering_dim)
+        nn.init.normal_(self.clustering.weight.data)
+        # decoding for pre-training
         self.decoder = ParallelModule([
             nn.Sequential(
                 nn.Linear(fc_hidden, shape[-1]),
                 nn.ReLU()
             ) for shape in sample_shapes
         ])
-        # 编码器用于fine-tuning
+        # encoding for fine-tuning
         self.encoder = ParallelModule([
             nn.Sequential(
                 nn.Linear(shape[-1], fc_hidden),
+                nn.BatchNorm1d(fc_hidden),
                 nn.ReLU(),
                 nn.Linear(fc_hidden, clustering_dim),
+                nn.BatchNorm1d(clustering_dim),
                 nn.ReLU()
             )for shape in sample_shapes
         ])
-        self.W = nn.ParameterList([nn.Parameter(torch.rand(clustering_dim, fc_hidden)) for i in sample_shapes])
-        self.clustering = nn.Embedding(num_train, clustering_dim)
-        nn.init.normal_(self.clustering.weight.data)
+        self.bn_trans = ParallelModule([
+            nn.Sequential(
+                EleLinear(clustering_dim),
+                nn.Sigmoid()
+            ) for i in sample_shapes
+        ])
         self.classifier = nn.Linear(clustering_dim, num_classes)
-        self.bn = ParallelModule([nn.BatchNorm1d(clustering_dim) for s in sample_shapes])
 
     def pre_training(self, x, y, index):
         # Decoding
@@ -53,34 +76,31 @@ class ProposedModel(nn.Module):
         views = {i: z_ @ self.W[i] for i in range(len(x))}
         views = self.decoder(views)
 
-        # `loss_x` is for reconstruction loss
-        # `loss_w` is for group constraint
-        loss_x, loss_w = 0, 0
+        # `loss_n_r` is for reconstruction loss
+        # `loss_w` is for structured sparseness regularizer
+        loss_n_r, loss_w = torch.zeros_like(y).float(), torch.tensor(0.0, device=y.device)
         for i in range(len(views)):
-            loss_x += torch.sum((views[i] - x[i])**2, dim=-1)
+            loss_n_r += torch.sum((views[i] - x[i])**2, dim=-1)
             loss_w += torch.max(self.W[i], dim=-1)[0].sum()
 
-        # `loss_z` is for z_
-        loss_z = z_.abs().sum()
+        # `loss_n_c` is for supervision information
+        inner_prod = z_ @ self.clustering.weight.T
+        y_pred = torch.cat(
+            [inner_prod[:, self.clustering_label == i].mean(dim=-1, keepdim=True) for i in range(self.num_classes)],
+            dim=-1
+        ).argmax(dim=-1)
+        distance = torch.zeros_like(y).float()
+        for i in range(len(y)):
+            distance[i] += inner_prod[i, self.clustering_label == y_pred[i].item()].mean().item()
+            distance[i] -= inner_prod[i, self.clustering_label == y[i].item()].mean().item()
+        loss_n_c = F.relu(torch.not_equal(y, y_pred).float() + distance)
 
-        # `loss_affinity` and `loss_away` is for Graph constraint
-        A = torch.zeros(len(y), len(y), device=y.device)
-        for c in range(self.num_classes):
-            active_class = y.eq(c).float().unsqueeze(dim=0)  # 筛选出当前类别c
-            A = A + (active_class.T @ active_class)  # 将类别c的邻接矩阵加入到总邻接矩阵
-        L_intern = A.sum(dim=-1).diag_embed() - A
-        loss_intern = torch.trace(z_.T @ L_intern @ z_)
-        L_extern = (1 - A).sum(dim=-1).diag_embed() - (1 - A)
-        loss_extern = - torch.trace(z_.T @ L_extern @ z_) * 0
-
-        loss = loss_x.mean() + self.alpha * loss_w + self.beta * loss_z + self.gamma * (loss_intern + loss_extern)
+        # Total loss
+        loss = torch.mean(loss_n_r + self.alpha_1 * loss_n_c) + self.alpha_2 * loss_w
         return {'loss': loss}
 
-    def forward(self, x, y=None, index=None, epoch=100):
+    def forward(self, x, y=None, index=None, epoch=50):
         views = self.encoder(x)
-        for i in range(len(self.sample_shapes)):
-            views[i] = views[i] * self.W[i].sum(dim=-1).softmax(dim=-1)
-        views = self.bn(views)
         fusion = sum(views.values()) / len(views)
         evidence = self.classifier(fusion)
         ret = {
@@ -90,9 +110,24 @@ class ProposedModel(nn.Module):
             'y': evidence.argmax(dim=-1),
         }
         if y is not None:
-            z_ = self.clustering(index)
-            delta = max(0, 1 - epoch / 10)  # 逐渐减小的系数
-            ret['loss'] = F.cross_entropy(evidence, y)
-            + delta * torch.norm(fusion - z_)**2
-            # + delta * torch.norm(torch.zeros(1))**2  # todo bn's gamma
+            w_c_v = {k: v.mean(dim=-1) for k, v in enumerate(self.W)}  # shape of each view: (clustering_dim)
+            bn_transform = self.bn_trans(w_c_v)
+            loss_bn_with_w = 0
+            loss_bn_l1norm = 0
+            for k in range(self.num_views):  # for each view
+                last_bn = None
+                for net in self.encoder.parallel_modules[k]:  # nets of current view
+                    if (isinstance(net, nn.BatchNorm1d)):
+                        last_bn = net  # Find the last bn layer
+                loss_bn_with_w += torch.mean((last_bn.weight - bn_transform[k])**2)
+                loss_bn_l1norm += last_bn.weight.mean()
+            loss_bn_with_w /= self.num_views
+
+            loss_n_a = torch.sum((fusion - self.clustering(index))**2, dim=-1) + self.sigma * loss_bn_with_w
+
+            ret['loss'] = torch.mean(
+                self.lambda_1 * F.cross_entropy(evidence, y)
+                + max(0, 1 - epoch / 10) * loss_n_a
+            )
+            + self.lambda_2 * loss_bn_l1norm  # todo: loss of L1-norm for bn's parameter
         return ret

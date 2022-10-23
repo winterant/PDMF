@@ -132,10 +132,10 @@ def experiment(data_path, hidden=512, clu_dim=128, alpha=0.01, beta=0.05, gamma=
 
 
 if __name__ == '__main__':
-    # experiment(data_path="dataset/handwritten_6views_train_test.mat")
+    experiment(data_path="dataset/handwritten_6views_train_test.mat")
     # experiment(data_path="dataset/CUB_c10_2views_train_test.mat")
     # experiment(data_path="dataset/PIE_train_test.mat")
     # experiment(data_path="dataset/2view-caltech101-8677sample_train_test.mat")
     # experiment(data_path="dataset/scene15_mtv_train_test.mat")
     # experiment(data_path="dataset/HMDB51_HOG_MBH_train_test.mat")
-    experiment(data_path="toy-example", hidden=12, clu_dim=9, alpha=0.01, beta=0.05, gamma=0.1)
+    # experiment(data_path="toy-example", hidden=12, clu_dim=9, alpha=0.01, beta=0.05, gamma=0.1)
