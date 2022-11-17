@@ -13,9 +13,9 @@ def train(model, train_loader, valid_loader, pre_epochs=50, epochs=50, save_weig
 
     # Pre-training
     optimizer = torch.optim.SGD([
-        {'params': (p for n, p in model.named_parameters() if 'weight' in n), 'weight_decay': 1e-6},
+        {'params': (p for n, p in model.named_parameters() if 'weight' in n), 'weight_decay': 1e-4},
         {'params': (p for n, p in model.named_parameters() if 'weight' not in n)}
-    ], lr=0.1)
+    ], lr=0.01)
     step_lr = torch.optim.lr_scheduler.StepLR(optimizer, step_size=16, gamma=0.1)
     model.train()
     for epoch in range(pre_epochs):
@@ -38,17 +38,12 @@ def train(model, train_loader, valid_loader, pre_epochs=50, epochs=50, save_weig
         step_lr.step()
         print(f'Epoch {epoch:3d}: lr {step_lr.get_last_lr()[0]:.6f}, pre-training loss {train_loss/num_samples:.6f}')
 
-    debug_pre_W = [w.clone().detach().data for w in model.W]
-    debug_pre_W_pooling = torch.stack([w.clone().detach().data.sum(dim=-1) for w in model.W], dim=1)
-    debug_clustering_weight = model.clustering.weight[:50, :]
-    # debug_clustering_weight = torch.cat([debug_clustering_weight.cpu(), torch.Tensor(train_loader.dataset[:50]['y']).unsqueeze(0)], dim=0)  # 显示出类别
-
     # Fine-tuning
-    model.W.requires_grad_(False)  # W不参与fine-tuning
+    model.W.requires_grad_(False)  # W drop out of fine-tuning
     optimizer = torch.optim.Adam([
-        {'params': (p for n, p in model.named_parameters() if p.requires_grad and 'weight' in n), 'weight_decay': 1e-3},
+        {'params': (p for n, p in model.named_parameters() if p.requires_grad and 'weight' in n), 'weight_decay': 1e-2},
         {'params': (p for n, p in model.named_parameters() if p.requires_grad and 'weight' not in n)},
-    ], lr=0.001)
+    ], lr=0.01)
     step_lr = torch.optim.lr_scheduler.StepLR(optimizer, step_size=13, gamma=0.1)
     best_valid_acc = 0.
     best_model_wts = model.state_dict()
@@ -102,7 +97,7 @@ def validate(model, loader, device='cuda'):
     return pred, acc
 
 
-def experiment(data_path, hidden=512, clu_dim=128, alpha=0.01, beta=0.05, gamma=0.1):
+def experiment(data_path):
     train_data = MultiViewDataset(data_path=data_path, train=True)
     valid_data = MultiViewDataset(data_path=data_path, train=False)
     train_loader = DataLoader(train_data, batch_size=256, shuffle=True)
@@ -110,11 +105,14 @@ def experiment(data_path, hidden=512, clu_dim=128, alpha=0.01, beta=0.05, gamma=
     pdmf = ProposedModel([s.shape for s in train_data[0]['x'].values()],
                          num_train=len(train_data),
                          num_classes=len(set(train_data.y)),
-                         fc_hidden=hidden,
-                         clustering_dim=clu_dim,
-                         alpha=alpha,  # L-∞ norm for W
-                         beta=beta,  # L-1 norm for Z
-                         gamma=gamma,  # graph norm for Z
+                         fc_hidden=512,
+                         clustering_dim=128,
+                         clustering_label=train_data.y,
+                         alpha_1=0.01,  # L_n_c
+                         alpha_2=0.00001,  # Loss W by 1-inf norm
+                         sigma=0.01,  # Loss bn with pretrained W
+                         lambda_1=0.1,  # Loss of classify by cross entropy
+                         lambda_2=0.01  # Loss bn by L1-norm
                          )
     print('---------------------------- Experiment ------------------------------')
     print('Dataset:', data_path)
@@ -126,7 +124,7 @@ def experiment(data_path, hidden=512, clu_dim=128, alpha=0.01, beta=0.05, gamma=
     for n, p in pdmf.named_parameters():
         print('%-40s' % n, '\t', p.data.shape)
     print('----------------------------------------------------------------------')
-    pdmf = train(pdmf, train_loader, valid_loader, pre_epochs=50, epochs=50)
+    pdmf = train(pdmf, train_loader, valid_loader, pre_epochs=20, epochs=50)
     pred, acc = validate(pdmf, valid_loader)
     print('predicting accuracy is', acc)
 
