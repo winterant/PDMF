@@ -8,15 +8,15 @@ from data import MultiViewDataset
 from models import ProposedModel
 
 
-def train(model, train_loader, valid_loader, pre_epochs=50, epochs=50, save_weights_to=None, device='cuda'):
+def train(model, train_loader, valid_loader, pre_epochs=20, epochs=50, save_weights_to=None, device='cuda'):
     model = model.to(device)
 
     # Pre-training
     optimizer = torch.optim.SGD([
         {'params': (p for n, p in model.named_parameters() if 'weight' in n), 'weight_decay': 1e-4},
         {'params': (p for n, p in model.named_parameters() if 'weight' not in n)}
-    ], lr=0.01)
-    step_lr = torch.optim.lr_scheduler.StepLR(optimizer, step_size=16, gamma=0.1)
+    ], lr=0.0001)
+    step_lr = torch.optim.lr_scheduler.StepLR(optimizer, step_size=13, gamma=0.1)
     model.train()
     for epoch in range(pre_epochs):
         train_loss, num_samples = 0, 0
@@ -30,9 +30,6 @@ def train(model, train_loader, valid_loader, pre_epochs=50, epochs=50, save_weig
             optimizer.zero_grad()
             ret['loss'].mean().backward()
             optimizer.step()
-            for i in range(len(x)):
-                model.W[i].data.clamp_(min=0)
-            model.clustering.weight.data.clamp_(0, 1)
             train_loss += ret['loss'].mean().item() * len(y)
             num_samples += len(y)
         step_lr.step()
@@ -44,7 +41,7 @@ def train(model, train_loader, valid_loader, pre_epochs=50, epochs=50, save_weig
         {'params': (p for n, p in model.named_parameters() if p.requires_grad and 'weight' in n), 'weight_decay': 1e-2},
         {'params': (p for n, p in model.named_parameters() if p.requires_grad and 'weight' not in n)},
     ], lr=0.01)
-    step_lr = torch.optim.lr_scheduler.StepLR(optimizer, step_size=13, gamma=0.1)
+    step_lr = torch.optim.lr_scheduler.StepLR(optimizer, step_size=23, gamma=0.1)
     best_valid_acc = 0.
     best_model_wts = model.state_dict()
     for epoch in range(epochs):
@@ -124,7 +121,7 @@ def experiment(data_path):
     for n, p in pdmf.named_parameters():
         print('%-40s' % n, '\t', p.data.shape)
     print('----------------------------------------------------------------------')
-    pdmf = train(pdmf, train_loader, valid_loader, pre_epochs=20, epochs=50)
+    pdmf = train(pdmf, train_loader, valid_loader)
     pred, acc = validate(pdmf, valid_loader)
     print('predicting accuracy is', acc)
 

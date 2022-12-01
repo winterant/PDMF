@@ -73,15 +73,15 @@ class ProposedModel(nn.Module):
     def pre_training(self, x, y, index):
         # Decoding
         z_ = self.clustering(index)
-        views = {i: z_ @ self.W[i] for i in range(len(x))}
+        views = {i: z_ @ self.W[i].abs() for i in range(len(x))}
         views = self.decoder(views)
 
         # `loss_n_r` is for reconstruction loss
         # `loss_w` is for structured sparseness regularizer
         loss_n_r, loss_w = torch.zeros_like(y).float(), torch.tensor(0.0, device=y.device)
         for i in range(len(views)):
-            loss_n_r += torch.sum((views[i] - x[i])**2, dim=-1)
-            loss_w += torch.max(self.W[i], dim=-1)[0].sum()
+            loss_n_r += torch.mean((views[i] - x[i])**2, dim=-1)
+            loss_w += torch.max(self.W[i].abs(), dim=-1)[0].sum()
 
         # `loss_n_c` is for supervision information
         inner_prod = z_ @ self.clustering.weight.T
@@ -110,7 +110,7 @@ class ProposedModel(nn.Module):
             'y': evidence.argmax(dim=-1),
         }
         if y is not None:
-            w_c_v = {k: v.mean(dim=-1) for k, v in enumerate(self.W)}  # shape of each view: (clustering_dim)
+            w_c_v = {k: v.abs().mean(dim=-1) for k, v in enumerate(self.W)}  # shape of each view: (clustering_dim)
             bn_transform = self.bn_trans(w_c_v)
             loss_bn_with_w = 0
             loss_bn_l1norm = 0
