@@ -94,9 +94,9 @@ def validate(model, loader, device='cuda'):
     return pred, acc
 
 
-def experiment(data_path):
-    train_data = MultiViewDataset(data_path=data_path, train=True)
-    valid_data = MultiViewDataset(data_path=data_path, train=False)
+if __name__ == '__main__':
+    train_data = MultiViewDataset(data_path='dataset/handwritten_6views_train.pkl')
+    valid_data = MultiViewDataset(data_path='dataset/handwritten_6views_test.pkl')
     train_loader = DataLoader(train_data, batch_size=256, shuffle=True)
     valid_loader = DataLoader(valid_data, batch_size=1024)
     pdmf = ProposedModel([s.shape for s in train_data[0]['x'].values()],
@@ -112,7 +112,6 @@ def experiment(data_path):
                          lambda_2=0.01  # Loss bn by L1-norm
                          )
     print('---------------------------- Experiment ------------------------------')
-    print('Dataset:', data_path)
     print('Number of views:', len(train_data.x), ' views with dims:', [v.shape[-1] for v in train_data.x.values()])
     print('Number of classes:', len(set(train_data.y)))
     print('Number of training samples:', len(train_data))
@@ -124,13 +123,3 @@ def experiment(data_path):
     pdmf = train(pdmf, train_loader, valid_loader)
     pred, acc = validate(pdmf, valid_loader)
     print('predicting accuracy is', acc)
-
-
-if __name__ == '__main__':
-    experiment(data_path="dataset/handwritten_6views_train_test.mat")
-    # experiment(data_path="dataset/CUB_c10_2views_train_test.mat")
-    # experiment(data_path="dataset/PIE_train_test.mat")
-    # experiment(data_path="dataset/2view-caltech101-8677sample_train_test.mat")
-    # experiment(data_path="dataset/scene15_mtv_train_test.mat")
-    # experiment(data_path="dataset/HMDB51_HOG_MBH_train_test.mat")
-    # experiment(data_path="toy-example", hidden=12, clu_dim=9, alpha=0.01, beta=0.05, gamma=0.1)

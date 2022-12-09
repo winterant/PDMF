@@ -11,5 +11,6 @@ Progressive Deep Multi-view Comprehensive Representation Learning.
 # Running
 
 ```
+python preprocess.py
 python main.py
 ```
